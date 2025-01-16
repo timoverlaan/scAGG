@@ -1,0 +1,17 @@
+# Data and output files
+data/
+out/
+
+# IDE files
+.vscode/
+
+# __pycache__ files
+__pycache__/
+*/__pycache__/
+
+# apptainer containers (very large)
+*.sif
+
+# pixi environments
+.pixi
+*.egg-info
