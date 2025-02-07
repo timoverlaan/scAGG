@@ -4,11 +4,6 @@ The repository contains the code corresponding to the paper that is now availabl
 
 Below, we provide instructions for reproducing the results presented in the paper.
 
-## Abstract
-
-Identifying key cell types and genes in Alzheimer’s Disease (AD) is crucial for understanding its pathogenesis and discovering therapeutic targets. Single cell RNA sequencing technology (scRNAseq) has provided unprecedented opportunities to study the molecular mechanisms that underlie AD at the cellular level. In this study, we address the problem of sample-level classification of AD using scRNAseq data, where we predict the disease status of entire samples from the gene expression profiles of their cells, which are not necessarily all affected by the disease. We introduce scAGG, a sample-level classification model which uses a sample-level pooling mechanism to aggregate single-cell embeddings, and show that it can accurately classify AD individuals and healthy controls. We then investigate the latent space learnt by the model and find that the model learns an ordering of the cells corresponding to disease severity. Genes associated with this ordering are enriched in AD-linked pathways, including cytokine signalling, apoptosis, and metal ion response. We also evaluate two attention-based models that perform on par with scAGG, but entropy analysis of their attention scores reveals limited interpretability value. As scRNAseq is increasingly applied to large cohorts, our approach provides a way to link individual phenotypes to single-cell measurements. Our cell- and sample-level severity scores may enable identification of AD-associated cell subtypes, paving the way for targeted drug development and personalized treatment strategies in AD.
-
-
 ## Setup
 
 The recommended way to set up the environment is using [pixi](https://pixi.sh/latest/). After installing pixi, simply run `pixi install` to setup the dependencies. 
@@ -24,12 +19,7 @@ The downloaded data was first combined into a single `.h5ad` file, to be used wi
 Given a `raw.h5ad` file, we used the following script and hyper-parameters to generate the dataset used to train/evaluate the model:
 
 ```sh
-pixi run python src/pre_processing.py \
-    --input data/raw.h5ad \
-    --output data/dataset_1k.h5ad \
-    --n_top_genes 1000 \
-    --gene_selection seurat_v3 \
-    --k_neighbors 30
+pixi run python src/pre_processing.py --input data/raw.h5ad --output data/dataset_1k.h5ad --n_top_genes 1000 --gene_selection seurat_v3 --k_neighbors 30
 ```
 
 For the experiments with 5000 genes, the corresponding parameter was updated above, and the script was run again.
@@ -46,8 +36,31 @@ Alternatively, any other single-cell transcriptomics dataset may be used, as lon
 
 ## Training the model
 
+The model is trained using the `train.py` script. We used the following command and hyper-parameters for base scAGG:
+```sh
+pixi run python src/train.py --dataset data/dataset_1k.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --learning-rate 0.001 --pooling mean --label wang --n_splits 5 --no-graph
+```
+
+And the following HPs were used for the GAT-based model:
+```sh
+pixi run python src/train.py --dataset data/dataset_1k.h5ad --dim 16 --split-seed 42 --batch-size 8 --dropout 0.5 --learning-rate 0.001 --pooling mean --label wang --n_splits 5  --n-epochs 5 --save-embeddings --save-attention --save
+```
+
+To enable attention-based pooling in either of the models, the `--pooling mean` parameter was changed to `--pooling self-att-sum`.
+
+After running the script above, a new time-stamped `.h5ad` file will be output in the `out/` folder, containing information about the performance, embeddings and attention scores.
+
 
 ### Evaluation of the baselines
 
+The other baseline models that we compare with in the paper are can be run using their corresponding notebooks and scripts in the `src/models/baselines` directory.
+
 ## Reproducing analyses in the paper
 
+We now give an overview of the notebooks and scripts required to reproduce the results presented in the paper:
+
+- **Figure 2**: Shows performance results from execution of experiments described above.
+- **Figure 3**: These visualizations are made using the notebook `src/analysis/fig_sample_embeddings.ipynb`
+- **Figure 4**: The UMAPs are calculated using the `src/analysis/fig_umap.ipynb` notebook. And the LISI scores are calculated using the `run_lisi.py` script.
+- **Figure 5**: The two plots can be reproduced using the `src/analysis/extreme_cells_emb.ipynb` notebook. The GSEA figure (panel c) is made with the output of `src/analysis/gsea.py`, to make the figure itself in `src/analysis/fig_gsea.ipynb`
+- **Figure 6**: The attention analysis is performed in two notebooks: `src/analysis/att_entropy.ipynb` and `src/analysis/att_interp.ipynb`.
