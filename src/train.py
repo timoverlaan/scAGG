@@ -12,7 +12,6 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from torch.utils.data import WeightedRandomSampler
 # from torchinfo import summary
 
-import env
 from train_util import _test_epoch, _train_epoch, generate_embeddings, mem
 from dataset.GraphDataset import GraphDataset
 from models.CellGAT import CellGAT
