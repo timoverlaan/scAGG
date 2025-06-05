@@ -10,12 +10,22 @@ from dataset.split import DONOR_COL
 
 def _adata_to_pyg_data(adata: ad.AnnData) -> Data:
     # Get the edges from the current donor
-    edges_in, edges_out = adata.obsp['connectivities'].nonzero()
-    edge_list = np.array([edges_in, edges_out])
+
+    if 'connectivities' not in adata.obsp:
+        print("WARNING: No connectivities found in adata.obsp. Continuing with empty edge list!")
+        edge_list = np.array([[], []], dtype=np.int64)
+    else:
+        edges_in, edges_out = adata.obsp['connectivities'].nonzero()
+        edge_list = np.array([edges_in, edges_out])
 
     # One-hot encode the labels
     y = np.array([1 - adata.obs['y'], adata.obs['y']])
-    msex = adata.obs['msex'].to_numpy()
+
+    if 'msex' not in adata.obs:
+        print("WARNING: Biological sex (column msex) not found in adata.obs. Continuing with sex as a covariate!")
+        msex = np.zeros(adata.n_obs, dtype=np.int64)
+    else:
+        msex = adata.obs['msex'].to_numpy()
 
     return Data(
         x=torch.tensor(adata.X.toarray(), dtype=torch.float32),

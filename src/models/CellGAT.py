@@ -26,6 +26,8 @@ class CellGAT(torch.nn.Module):
         sag: bool = True,
         task: str = "classification",
         sex_covariate: bool = False,
+        means: torch.Tensor = None,
+        stds: torch.Tensor = None,
     ) -> None:
         
         self.dim_in = dim_in
@@ -88,6 +90,10 @@ class CellGAT(torch.nn.Module):
             out_features=2 if task == "classification" else 1,
         )
 
+        self.means = torch.nn.Parameter(means, requires_grad=False) if means is not None else None
+        self.stds = torch.nn.Parameter(stds, requires_grad=False) if stds is not None else None
+
+
     def forward(self, data: Data) -> torch.Tensor:        
         y_hat, _ = self.forward_with_embeddings(data)
         return y_hat
@@ -96,6 +102,11 @@ class CellGAT(torch.nn.Module):
         edge_index = data.edge_index
         h = data.x
         msex = data.msex  # Added as a covariate
+
+        if self.means is not None and self.stds is not None:
+            # Normalize the input features
+            h = (h - self.means) / self.stds
+        
 
         # TODO: why use this dropout instead of pyg edge/node dropout?
         h = F.dropout(h, p=self.dropout, training=self.training)

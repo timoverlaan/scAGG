@@ -19,7 +19,6 @@ from dataset.Dataset import Dataset
 from dataset.GraphDataset import GraphDataset
 from dataset.split import adata_train_test_split
 from models.CellGAT import CellGAT
-from models.Linear import Linear
 from models.NoGraph import NoGraph
 
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
@@ -43,7 +42,7 @@ def mem(tag: str = ""):
         print(f"MEMORY USAGE (current={mem_ps / 10**6:>6.0f} MB): {tag}")
 
 
-def _prepare_data_for_model(data, model: Union[CellGAT, Linear], device) -> tuple[Union[Data, torch.Tensor], torch.Tensor]:
+def _prepare_data_for_model(data, model: Union[CellGAT, NoGraph], device) -> tuple[Union[Data, torch.Tensor], torch.Tensor]:
     """
     Prepare data for the specific model.
     The GAT and baseline Linear model require different data preparation.
@@ -57,11 +56,7 @@ def _prepare_data_for_model(data, model: Union[CellGAT, Linear], device) -> tupl
     Returns:
         tuple[Any, torch.Tensor]: Prepared data and labels.
     """
-    if type(model) == Linear:
-        x, y_true = data
-        data = x.to(device)
-        y_true = y_true.to(device)
-    elif type(model) == CellGAT or type(model) == NoGraph:
+    if type(model) == CellGAT or type(model) == NoGraph:
         data = data.to(device)
         y_true = data.y
     else:
@@ -120,6 +115,7 @@ def _train_epoch(model, loader, optimizer, criterion, device, epoch, n_batches, 
             x, y_true = _prepare_data_for_model(
                 data, model, device)
             
+
             # if model.pool is not None or model.pool_str == "att":
             # We make sure the labels are aggregated per batch
             y_true = global_mean_pool(y_true, data.batch)
@@ -400,7 +396,7 @@ def generate_name(model) -> str:
     return f"{datetime.now():%Y-%m-%d-%H-%M-%S}_{model.name}"
 
 
-def save_results(model: Union[CellGAT, Linear], adata: ad.AnnData) -> ad.AnnData:
+def save_results(model: Union[CellGAT, NoGraph], adata: ad.AnnData) -> ad.AnnData:
 
     # For each cell we save whether it was part of the test or train set.
     adata.obs["train_set"] = np.select(
@@ -584,7 +580,7 @@ def train_model(
 
     # Other settings
     verbose: bool = False,
-) -> tuple[ad.AnnData, Union[CellGAT, Linear]]:
+) -> tuple[ad.AnnData, Union[CellGAT, NoGraph]]:
 
     exp_start = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     if verbose:

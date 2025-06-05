@@ -5,15 +5,17 @@ import argparse
 import gc
 
 from datetime import datetime
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from torch_geometric.loader import DataLoader as PygDataLoader
 from torch_geometric.loader import NeighborLoader as PygNeighborLoader
+from torch_geometric.loader import NodeLoader, RandomNodeLoader
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
-from torch.utils.data import WeightedRandomSampler
+from torch.utils.data import WeightedRandomSampler, DataLoader
 # from torchinfo import summary
 
 from train_util import _test_epoch, _train_epoch, generate_embeddings, mem
 from dataset.GraphDataset import GraphDataset
+from dataset.Dataset import Dataset
 from models.CellGAT import CellGAT
 from models.NoGraph import NoGraph
 from dataset.split import adata_kfold_split
@@ -40,7 +42,7 @@ parser.add_argument('--verbose', action="store_true", help='Verbose')
 parser.add_argument('--test-interval', type=int, default=-1, help='Test epoch interval during training (-1 for no testing)')
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph baseline model')
-
+parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
 
 def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
     """
@@ -65,40 +67,42 @@ if __name__ == "__main__":
 
     adata = ad.read_h5ad(filename=args.dataset)
 
+    # NOTE: below are a bunch of steps that should ideally be moved to a processing script instead.
+
     # print("All celltypes", adata.obs["cell_type_high_resolution"].unique().tolist())
     # print(adata.obs.keys().tolist())
     # print("Major celltypes", adata.obs["Supertype"].unique().tolist())
     # mic_celltypes = [ct for ct in adata.obs["cell_type_high_resolution"].unique() if "Mic" in ct or "Ast" in ct]
     # print(f"Microglia cell types: {mic_celltypes}")
 
-    adata.obs["Celltype"] = adata.obs["Supertype"].map({
-        "Astrocytes": "Astrocytes",
-        "Excitatory_neurons_set1": "Excitatory_neurons",
-        "Excitatory_neurons_set2": "Excitatory_neurons",
-        "Excitatory_neurons_set3": "Excitatory_neurons",
-        "Immune_cells": "Immune_cells",
-        "Inhibitory_neurons": "Inhibitory_neurons",
-        "Oligodendrocytes": "Oligodendrocytes",
-        "OPCs": "OPCs",
-        "Vasculature_cells": "Vasculature_cells",
-    })
+    # adata.obs["Celltype"] = adata.obs["Supertype"].map({
+    #     "Astrocytes": "Astrocytes",
+    #     "Excitatory_neurons_set1": "Excitatory_neurons",
+    #     "Excitatory_neurons_set2": "Excitatory_neurons",
+    #     "Excitatory_neurons_set3": "Excitatory_neurons",
+    #     "Immune_cells": "Immune_cells",
+    #     "Inhibitory_neurons": "Inhibitory_neurons",
+    #     "Oligodendrocytes": "Oligodendrocytes",
+    #     "OPCs": "OPCs",
+    #     "Vasculature_cells": "Vasculature_cells",
+    # })
     
-    adata_tmp = adata[adata.obs["Celltype"] == "OPCs"].copy()
-    del adata
-    adata = adata_tmp
+    # adata_tmp = adata[adata.obs["Celltype"] == "OPCs"].copy()
+    # del adata
+    # adata = adata_tmp
 
     # For SeaAD, we have to make the metadata match first
-    if "msex" not in adata.obs.columns:  
-        adata.obs["msex"] = adata.obs["Sex"].map({"Male": 1, "Female": 0})
-    if "cogdx" not in adata.obs.columns:
-        adata.obs["cogdx"] = adata.obs["Label"].map({"AD": 4, "CT": 1})
-    if "braaksc" not in adata.obs.columns:
-        adata.obs["braaksc"] = adata.obs["Braak"].map({"Braak 0": 0, "Braak I": 1, "Braak II": 2, "Braak III": 3, "Braak IV": 4, "Braak V": 5, "Braak VI": 6})
-    if "ceradsc" not in adata.obs.columns:
-        adata.obs["ceradsc"] = adata.obs["CERAD score"].map({"Absent": 4, "Sparse": 3, "Moderate": 2, "Frequent": 1})
+    # if "msex" not in adata.obs.columns:  
+    #     adata.obs["msex"] = adata.obs["Sex"].map({"Male": 1, "Female": 0})
+    # if "cogdx" not in adata.obs.columns:
+    #     adata.obs["cogdx"] = adata.obs["Label"].map({"AD": 4, "CT": 1})
+    # if "braaksc" not in adata.obs.columns:
+    #     adata.obs["braaksc"] = adata.obs["Braak"].map({"Braak 0": 0, "Braak I": 1, "Braak II": 2, "Braak III": 3, "Braak IV": 4, "Braak V": 5, "Braak VI": 6})
+    # if "ceradsc" not in adata.obs.columns:
+    #     adata.obs["ceradsc"] = adata.obs["CERAD score"].map({"Absent": 4, "Sparse": 3, "Moderate": 2, "Frequent": 1})
 
     donor_counts = adata.obs["Donor ID"].value_counts()
-    donor_sex = adata.obs.groupby("Donor ID").first()["msex"]
+    # donor_sex = adata.obs.groupby("Donor ID").first()["msex"]
 
     # Model hyper parameters
     hp={
@@ -172,10 +176,12 @@ if __name__ == "__main__":
         # We do regression, because this is a continuous variable
         adata.obs["Label"] = adata.obs[args.label]  # (0-6)
 
-    else:
-        assert args.label == "cogdx"
+    elif args.label == "cogdx":
         # Remap labels based on the cognitive diagnosis
         adata.obs["Label"] = adata.obs["cogdx"].map({1: "CT", 2: "CT", 3: "CT", 4: "AD", 5: "AD"})
+
+    else:
+        adata.obs["Label"] = adata.obs[args.label]  # Use the label as is
     
     donor_labels = adata.obs.groupby("Donor ID").first()["Label"]
     print(f"Using labels: {args.label}")
@@ -184,8 +190,12 @@ if __name__ == "__main__":
     if task == "classification":
         # If specified, we drop "Other" donors here to make training easier
         adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
-        adata = adata[adata.obs["Label"].isin(["AD", "CT"])].copy()
-        adata.obs["y"] = adata.obs["Label"].map({"AD": 1, "CT": 0})
+        if "AD" in adata.obs["Label"].unique() and "CT" in adata.obs["Label"].unique():
+            adata = adata[adata.obs["Label"].isin(["AD", "CT"])].copy()
+            adata.obs["y"] = adata.obs["Label"].map({"AD": 1, "CT": 0})
+        if 0 in adata.obs["Label"].unique() and 1 in adata.obs["Label"].unique():
+            adata = adata[adata.obs["Label"].isin([0, 1])].copy()
+            adata.obs["y"] = adata.obs["Label"]
     else:
         adata_full = adata
         if args.label in ["amyloid", "plaq_n_mf"]:
@@ -205,6 +215,28 @@ if __name__ == "__main__":
         # Split the AnnData object based on the donors
         train_adata = adata[adata.obs["Donor ID"].isin(train_donors), :]
         test_adata = adata[adata.obs["Donor ID"].isin(test_donors), :]
+
+
+        # Below we incrementally calculate the means and stds for normalization for the training data.
+        # Why don't we directly apply it? Because we want to keep the data sparse as much as possible, 
+        #   and when standardizing, we lose the zeros.
+        # So instead, we calculate the mean and std here, and then apply it in the forward pass of the model.
+        print("Calculating means and stds for normalization...")
+        sums = np.zeros((1, adata.shape[1]))
+        sum_sqs = np.zeros((1, adata.shape[1]))
+        chunk_size = 10000
+        for i in trange(0, train_adata.shape[0], chunk_size):
+
+            chunk = train_adata.X[i:i+chunk_size].todense()
+            sums += chunk.sum(axis=0)
+            sum_sqs += (np.power(chunk, 2)).sum(axis=0)
+
+        means = sums / adata.shape[0]
+        stds = np.sqrt(sum_sqs / adata.shape[0] - np.power(means, 2))
+        stds[stds == 0] = 1
+        means = torch.tensor(means, dtype=torch.float32)
+        stds = torch.tensor(stds, dtype=torch.float32)
+        print("Done calculating means and stds for normalization.")
     
         if task == "classification":
             train_bal = train_adata.obs["y"].value_counts()[1] / train_adata.n_obs
@@ -212,12 +244,21 @@ if __name__ == "__main__":
             print(f"Train balance p(AD)={train_bal:.3f}")
             print(f"Test balance p(AD)={test_bal:.3f}")
 
-            class_weight = {
-                "CT": { 0: 0, 1: 0, },
-                "AD": { 0: 0, 1: 0, }
-            }
-            for donor_id in train_donors:
-                class_weight[donor_labels[donor_id]][donor_sex[donor_id]] += 1
+            if args.batch_stratify_sex:
+                class_weight = {
+                    adata.obs["Label"].unique()[0]: { 0: 0, 1: 0, },
+                    adata.obs["Label"].unique()[1]: { 0: 0, 1: 0, }
+                }
+                for donor_id in train_donors:
+                    class_weight[donor_labels[donor_id]][donor_sex[donor_id]] += 1
+
+            else:  # Only stratify on class label
+                class_weight = {
+                    adata.obs["Label"].unique()[0]: 0,
+                    adata.obs["Label"].unique()[1]: 0,
+                }
+                for donor_id in train_donors:
+                    class_weight[donor_labels[donor_id]] += 1
 
             print("Class weights:")
             print(class_weight)
@@ -226,8 +267,11 @@ if __name__ == "__main__":
             #   so large graphs are not sampled from more frequently.
             donor_weights = dict()
             for donor_id in train_donors:
-                # label_weight = 1 / class_weight[donor_labels[donor_id]][donor_sex[donor_id]]
-                donor_weights[donor_id] = 1000 / donor_counts[donor_id]
+                if args.batch_stratify_sex:
+                    # label_weight = 1 / class_weight[donor_labels[donor_id]][donor_sex[donor_id]]
+                    pass
+                else:
+                    donor_weights[donor_id] = 1000 / donor_counts[donor_id]
             sample_weights = torch.tensor([donor_weights[donor_id] for donor_id in train_adata.obs["Donor ID"]], dtype=torch.float32)
 
         if task == "regression":
@@ -238,9 +282,10 @@ if __name__ == "__main__":
 
         # The train data is loaded in batches from different donors, to provide regularization,
         # and make sure the data fits in GPU memory.
+        # if not args.no_graph:
         train_loader = PygNeighborLoader(
             data=GraphDataset(adata=train_adata, test=False)[0],
-            num_neighbors=[15, 15],
+            num_neighbors=[0, 0] if args.no_graph and False else [15, 15],
             batch_size=1,  # We manually build the batches in the training loop
             shuffle=False,
             # disjoint=True,  # I want to use this, but it requires pyg-lib, which is not available for windows
@@ -279,7 +324,10 @@ if __name__ == "__main__":
             sag=args.sag,
             task=task,
             sex_covariate=True,
+            means = means,
+            stds = stds,
         )
+
         model = model.to(device)
         model.train()
 
