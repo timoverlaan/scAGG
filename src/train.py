@@ -106,7 +106,7 @@ if __name__ == "__main__":
 
     # Model hyper parameters
     hp={
-        "model_type": "GAT",
+        "model_type": "NoGraph" if args.no_graph else "GAT",
         "lr": args.learning_rate,
         "wd": args.weight_decay,
         "batch_size": args.batch_size,
@@ -206,6 +206,7 @@ if __name__ == "__main__":
         del adata
         adata = adata_slice
 
+
     test_accs = []
     for split_i, (train_donors, test_donors) in enumerate(adata_kfold_split(adata, n_splits=args.n_splits, seed=args.split_seed, task=task)):
 
@@ -215,6 +216,7 @@ if __name__ == "__main__":
         # Split the AnnData object based on the donors
         train_adata = adata[adata.obs["Donor ID"].isin(train_donors), :]
         test_adata = adata[adata.obs["Donor ID"].isin(test_donors), :]
+
 
 
         # Below we incrementally calculate the means and stds for normalization for the training data.
