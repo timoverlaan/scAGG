@@ -188,7 +188,7 @@ if __name__ == "__main__":
     print(adata.obs["Label"].value_counts())
     
     if task == "classification":
-        # If specified, we drop "Other" donors here to make training easier
+        # If specified, we drop "Other" donors here
         adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
         if "AD" in adata.obs["Label"].unique() and "CT" in adata.obs["Label"].unique():
             adata = adata[adata.obs["Label"].isin(["AD", "CT"])].copy()
@@ -216,8 +216,6 @@ if __name__ == "__main__":
         # Split the AnnData object based on the donors
         train_adata = adata[adata.obs["Donor ID"].isin(train_donors), :]
         test_adata = adata[adata.obs["Donor ID"].isin(test_donors), :]
-
-
 
         # Below we incrementally calculate the means and stds for normalization for the training data.
         # Why don't we directly apply it? Because we want to keep the data sparse as much as possible, 
