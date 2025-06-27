@@ -104,7 +104,7 @@ class SelfAttentionAggregator(nn.Module):
         self.multihead_attn = nn.MultiheadAttention(embed_dim, heads)
         self.linear = nn.Linear(embed_dim, 1)  # Assuming binary classification or regression
     
-    def forward(self, x, batch):
+    def forward(self, x, batch, return_att: bool = False):
         # x shape: (total_samples, embed_dim)
         # batch shape: (total_samples,)
 
@@ -113,7 +113,7 @@ class SelfAttentionAggregator(nn.Module):
         
         unique_batches = torch.unique(batch)
         batch_outputs = []
-
+        
         # print(f"unique_batches: {unique_batches}")
         
         for b in unique_batches:
@@ -142,5 +142,7 @@ class SelfAttentionAggregator(nn.Module):
         
         # Pass the CLS token outputs through a linear layer
         # output = self.linear(batch_outputs)  # [num_batches, 1]
-        
+
+        if return_att:
+            return output, None
         return output
