@@ -27,14 +27,23 @@ exit 0  # Don't run this script directly, it's just for reference.
 
 
 # with the Mathys DEGs
-# pixi run python src/train.py --dataset data/rosmap_mit_Mathysgenes_k30.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling mean --label wang --n_splits 5 --no-graph
-# Mean performance over all folds: (but this is on the newly processed ROSMAP, so it still has the outliers)
+pixi run python src/train.py --dataset data/rosmap_mit_Mathysgenes_k30.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling mean --label wang --n_splits 5 --no-graph
+# Mean performance over all folds: (but this is on the newly processed ROSMAP, so it still has the outliers, should compare with: w:\staff-umbrella\scGraphNN\rosmap-processing\data\processed\rosmap_mit_top1000_k30.h5ad)
 #     accuracy over all folds: 0.6882 (+-0.0711)
 #    precision over all folds: 0.7193 (+-0.0493)
 #       recall over all folds: 0.8437 (+-0.0746)
 #           f1 over all folds: 0.7755 (+-0.0537)
 #      roc_auc over all folds: 0.7430 (+-0.0341)
 
+# with new processed rosmap top1000 (Mathys genes performance should be compared with this)
+pixi run python src/train.py --dataset data/rosmap_mit_top1000_k30.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling mean --label wang --n_splits 5 --no-graph
+# Mean performance over all folds:
+#         accuracy over all folds: 0.7000 (+-0.0570)
+#        precision over all folds: 0.7331 (+-0.0535)
+#           recall over all folds: 0.8437 (+-0.0378)
+#               f1 over all folds: 0.7835 (+-0.0378)
+#          roc_auc over all folds: 0.7331 (+-0.0329)
+# (so the improvement of using DEGs is marginal)
 
 
 ######### COMBAT #########
