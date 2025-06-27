@@ -23,7 +23,7 @@ from dataset.split import adata_kfold_split
 
 parser = argparse.ArgumentParser(description='Train a model on a dataset.')
 parser.add_argument('--dataset', type=str, help='Path to the dataset (.h5ad)')
-parser.add_argument('--learning-rate', type=float, default=0.0001, help='Learning rate')
+parser.add_argument('--learning-rate', type=float, default=0.001, help='Learning rate')
 parser.add_argument('--weight-decay', type=float, default=0.00005, help='Weight decay')
 parser.add_argument('--batch-size', type=int, default=16, help='Batch size')
 parser.add_argument('--dropout', type=float, default=0.75, help='Dropout')
@@ -43,6 +43,8 @@ parser.add_argument('--test-interval', type=int, default=-1, help='Test epoch in
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph baseline model')
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
+parser.add_argument("--output", type=str, default=None, help="Output file name for the results. If not provided, it will be generated based on the hyperparameters and timestamp.")
+
 
 def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
     """
@@ -407,7 +409,10 @@ if __name__ == "__main__":
 
         if args.save and not split_i == args.n_splits - 1:
             print(f"Saving intermediate results to disk...")
-            adata_full.write_h5ad(filename=f"/tudelft.net/staff-umbrella/ctcc/geneGNN/out/results/{out_file_base_name}_results_{split_i}.h5ad", compression="gzip")
+            outfile = f"out/results/{out_file_base_name}_results.h5ad"
+            if args.output is not None:
+                outfile = args.output
+            adata_full.write_h5ad(filename=outfile, compression="gzip")
 
     del adata
     adata = adata_full
@@ -439,8 +444,11 @@ if __name__ == "__main__":
 
     if args.save:
         print("Writing results to disk...")
-        adata.write_h5ad(filename=f"out/results/{out_file_base_name}_results.h5ad", compression="gzip")
-        print("Done writing results to disk. Filename: ", f"out/results/{out_file_base_name}_results.h5ad")
+        outfile = f"out/results/{out_file_base_name}_results.h5ad"
+        if args.output is not None:
+            outfile = args.output
+        adata_full.write_h5ad(filename=outfile, compression="gzip")
+        print("Done writing results to disk. Filename: ", outfile)
 
     mem("after EVERYTHING")
     print("\nEverything done!\n")

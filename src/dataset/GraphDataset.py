@@ -24,9 +24,9 @@ def _adata_to_pyg_data(adata: ad.AnnData) -> Data:
     # One-hot encode the labels
     y = np.array([1 - adata.obs['y'], adata.obs['y']])
 
-    if 'msex' not in adata.obs and not already_warned:
-        already_warned = True
-        print("WARNING: Biological sex (column msex) not found in adata.obs. Continuing without sex as a covariate!")
+    if 'msex' not in adata.obs: # and not already_warned:
+        # already_warned = True
+        # print("WARNING: Biological sex (column msex) not found in adata.obs. Continuing without sex as a covariate!")
         msex = np.zeros(adata.n_obs, dtype=np.int64)
     else:
         msex = adata.obs['msex'].to_numpy()
