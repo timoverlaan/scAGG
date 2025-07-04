@@ -30,7 +30,7 @@ parser.add_argument('--save-embeddings', action="store_true", help='Save the emb
 parser.add_argument('--verbose', action="store_true", help='Verbose')
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
-
+parser.add_argument('--output', type=str, default=None, help='Output file name for the results')
 
 def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
     """
@@ -223,7 +223,7 @@ if __name__ == "__main__":
         adata = generate_embeddings(adata, model, test_device, {}, args, 0, ALL_DONORS, [], save_attention=args.save_attention)
         adata_full.uns[f"perf_test"] = calc_fold_performance(adata, 0, ALL_DONORS)
 
-    del adata, model
+    del model
 
     gc.collect(), torch.cuda.empty_cache(), mem("after test/embeddings")
     print(f"\nPerformance:")
@@ -231,10 +231,47 @@ if __name__ == "__main__":
         print(f"    {k}: {v}")
     print()
 
-    if args.save_embeddings or args.save_attention:
+    # confusion matrix
+    print("Confusion matrix:")
+    from sklearn.metrics import confusion_matrix
+    y_pred = np.array([np.array(v).flatten()[1] for v in adata.uns[f"y_pred_graph_f0"].values()])
+    print(y_pred.shape, y_pred)
+    y_true = np.array([
+        adata_full[adata_full.obs["Donor ID"] == donor_id].obs["y"].mean() for donor_id in adata.uns[f"y_pred_graph_f0"].keys()
+    ])
+
+    print(f"y_true: {y_true.shape} --> {y_true[:10]}")
+    print(f"y_pred: {len(y_pred)} --> {y_pred[:10]}")
+    
+    cm = confusion_matrix(y_true, y_pred.round())
+    print(cm)
+    print()
+
+    # and plot the ROC
+    from sklearn.metrics import roc_curve, auc
+    fpr, tpr, _ = roc_curve(y_true, y_pred)
+    roc_auc = auc(fpr, tpr)
+    print(f"ROC AUC: {roc_auc}")
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.plot(fpr, tpr, color='blue', label=f'ROC curve (area = {roc_auc:.2f})')
+    plt.plot([0, 1], [0, 1], color='red', linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver Operating Characteristic')
+    plt.legend(loc='lower right')
+    plt.show()
+
+    if args.save_embeddings or args.save_attention or args.output is not None:
+        if args.output is None:
+            out_file = f"out/results/{out_file_base_name}_results.h5ad"
+        else:
+            out_file = args.output
         print("Writing results to disk...")
-        adata_full.write_h5ad(filename=f"out/results/{out_file_base_name}_results.h5ad", compression="gzip")
-        print("Done writing results to disk. Filename: ", f"out/results/{out_file_base_name}_results.h5ad")
+        adata_full.write_h5ad(filename=out_file, compression="gzip")
+        print(f"Done writing results to disk. Filename: {out_file}")
 
     mem("after EVERYTHING")
     print("\nEverything done!\n")

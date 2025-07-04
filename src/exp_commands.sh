@@ -49,13 +49,37 @@ pixi run python src/train.py --dataset data/rosmap_mit_top1000_k30.h5ad --n-epoc
 ######### COMBAT #########
 
 # base scAGG on COMBAT
-pixi run python src/train.py --dataset data/COMBAT/COMBAT-CITESeq-DATA-top2000.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling mean --label SARSCoV2PCR --n_splits 5 --no-graph --output out/results/COMBAT_top2000_scAGG_results.h5ad
+pixi run python src/train.py --dataset data/COMBAT/COMBAT-CITESeq-DATA-top2000.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling mean --label SARSCoV2PCR --n_splits 5 --no-graph --save --output out/results/COMBAT_top2000_scAGG_results.h5ad
 
 # with GAT
 pixi run python src/train.py --dataset data/COMBAT/COMBAT-CITESeq-DATA-top2000_k30.h5ad --dim 16 --split-seed 42 --batch-size 8 --dropout 0.5 --pooling mean --label SARSCoV2PCR --n_splits 5  --n-epochs 5 --save --output out/results/COMBAT_top2000_scAGG+GAT_results.h5ad
 
 # with attention pooling (AP)
-pixi run python src/train.py --dataset data/COMBAT/COMBAT-CITESeq-DATA-top2000.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling self-att-sum --label SARSCoV2PCR --n_splits 5 --no-graph --output out/results/COMBAT_top2000_scAGG+AP_results.h5ad
+pixi run python src/train.py --dataset data/COMBAT/COMBAT-CITESeq-DATA-top2000.h5ad --n-epochs 2 --dim 32 --split-seed 42 --batch-size 8 --dropout 0.1 --pooling self-att-sum --label SARSCoV2PCR --n_splits 5 --no-graph --save --output out/results/COMBAT_top2000_scAGG+AP_results.h5ad
 
 # with GAT + AP
 pixi run python src/train.py --dataset data/COMBAT/COMBAT-CITESeq-DATA-top2000_k30.h5ad --dim 16 --split-seed 42 --batch-size 8 --dropout 0.5 --pooling self-att-sum --label SARSCoV2PCR --n_splits 5  --n-epochs 5 --save --output out/results/COMBAT_top2000_scAGG+GAT+AP_results.h5ad
+
+
+
+######### SeaAD as External Validation #########
+
+# base scAGG, trained on ROSMAP, validated on SeaAD
+pixi run python src/train_full.py --dataset data/adata_rosmap_v3_top959.h5ad --n-epochs 2 --dim 32 --batch-size 8 --dropout 0.1 --pooling mean --label wang --no-graph --output out/results/ROSMAP_scAGG_full.h5ad --output-model out/results/ROSMAP_scAGG_full_model.pt --save
+
+pixi run python src/eval.py --dataset data/seaad959_k30_matched.h5ad --model out/results/ROSMAP_scAGG_full_model.pt --label Wang --output out/results/SeaAD_scAGG_full_results.h5ad
+
+# scAGG + GAT, trained on ROSMAP, validated on SeaAD
+pixi run python src/train_full.py --dataset data/adata_rosmap_v3_top959.h5ad --dim 16 --batch-size 8 --dropout 0.5 --pooling mean --label wang --n-epochs 5 --save --output out/results/ROSMAP_scAGG+GAT_full.h5ad --output-model out/results/ROSMAP_scAGG+GAT_full_model.pt
+
+pixi run python src/eval.py --dataset data/seaad959_k30_matched.h5ad --model out/results/ROSMAP_scAGG+GAT_full_model.pt --label Wang --output out/results/SeaAD_scAGG+GAT_full_results.h5ad
+
+# scAGG + AP, trained on ROSMAP, validated on SeaAD
+pixi run python src/train_full.py --dataset data/adata_rosmap_v3_top959.h5ad --n-epochs 2 --dim 32 --batch-size 8 --dropout 0.1 --pooling self-att-sum --label wang --no-graph --output out/results/ROSMAP_scAGG+AP_full.h5ad --output-model out/results/ROSMAP_scAGG+AP_full_model.pt --save
+
+pixi run python src/eval.py --dataset data/seaad959_k30_matched.h5ad --model out/results/ROSMAP_scAGG+AP_full_model.pt --label Wang --output out/results/SeaAD_scAGG+AP_full_results.h5ad
+
+# scAGG + GAT + AP, trained on ROSMAP, validated on SeaAD
+pixi run python src/train_full.py --dataset data/adata_rosmap_v3_top959.h5ad --dim 16 --batch-size 8 --dropout 0.5 --pooling self-att-sum --label wang --n-epochs 5 --save --output out/results/ROSMAP_scAGG+GAT+AP_full.h5ad --output-model out/results/ROSMAP_scAGG+GAT+AP_full_model.pt
+
+pixi run python src/eval.py --dataset data/seaad959_k30_matched.h5ad --model out/results/ROSMAP_scAGG+GAT+AP_full_model.pt --label Wang --output out/results/SeaAD_scAGG+GAT+AP_full_results.h5ad

@@ -57,19 +57,6 @@ def save_perf(
     if model_name not in data:
         data[model_name] = []
 
-    if type(train_donors) is not list:
-        train_donors = train_donors.tolist()
-    if type(test_donors) is not list:
-        test_donors = test_donors.tolist()
-    if type(train_y) is not list:
-        train_y = train_y.tolist()
-    if type(test_y) is not list:
-        test_y = test_y.tolist()
-    if type(train_y_pred) is not list:
-        train_y_pred = train_y_pred.tolist()
-    if type(test_y_pred) is not list:
-        test_y_pred = test_y_pred.tolist()
-
     # make the fold dict
     fold_dict = {
         "fold": fold,
@@ -78,13 +65,21 @@ def save_perf(
         "recall": recall,
         "f1": f1,
         "roc_auc": roc_auc,
-        "train_donors": train_donors,
-        "test_donors": test_donors,
-        "train_y": train_y,
-        "test_y": test_y,
-        "train_y_pred": train_y_pred,
-        "test_y_pred": test_y_pred,
     }
+
+    if train_donors is not None and type(train_donors) is not list:
+        fold_dict["train_donors"] = train_donors.tolist()
+    if test_donors is not None and type(test_donors) is not list:
+        fold_dict["test_donors"] = test_donors.tolist()
+    if train_y is not None and type(train_y) is not list:
+        fold_dict["train_y"] = train_y.tolist()
+    if test_y is not None and type(test_y) is not list:
+        fold_dict["test_y"] = test_y.tolist()
+    if train_y_pred is not None and type(train_y_pred) is not list:
+        fold_dict["train_y_pred"] = train_y_pred.tolist()
+    if test_y_pred is not None and type(test_y_pred) is not list:
+        fold_dict["test_y_pred"] = test_y_pred.tolist()
+    
 
     for key, value in kwargs.items():
         fold_dict[key] = value
