@@ -442,7 +442,7 @@ if __name__ == "__main__":
 
     print()
 
-    if args.save:
+    if args.save or args.output is not None:
         print("Writing results to disk...")
         outfile = f"out/results/{out_file_base_name}_results.h5ad"
         if args.output is not None:

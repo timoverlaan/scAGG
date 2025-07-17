@@ -40,6 +40,9 @@ parser.add_argument('--verbose', action="store_true", help='Verbose')
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph baseline model')
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
+parser.add_argument('--output', type=str, default=None, help='Output file name for the results')
+parser.add_argument('--output-model', type=str, default=None, help='Output file name for the model')
+
 
 def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
     """
@@ -257,14 +260,12 @@ if __name__ == "__main__":
                 # label_weight = 1 / class_weight[donor_labels[donor_id]][donor_sex[donor_id]]
                 pass
             else:
-                donor_weights[donor_id] = 1000 / donor_counts[donor_id]
+                # donor_weights[donor_id] = (1 / donor_counts[donor_id]) * (1 / class_weight[donor_labels[donor_id]])
+                donor_weights[donor_id] = (1 / class_weight[donor_labels[donor_id]])
         sample_weights = torch.tensor([donor_weights[donor_id] for donor_id in adata.obs["Donor ID"]], dtype=torch.float32)
 
-    if task == "regression":
-        donor_weights = dict()
-        for donor_id in ALL_DONORS:
-            donor_weights[donor_id] = 1000 / donor_counts[donor_id]
-        sample_weights = torch.tensor([donor_weights[donor_id] for donor_id in adata.obs["Donor ID"]], dtype=torch.float32)
+
+
 
     # The train data is loaded in batches from different donors, to provide regularization,
     # and make sure the data fits in GPU memory.
@@ -349,8 +350,16 @@ if __name__ == "__main__":
     gc.collect(), torch.cuda.empty_cache(), mem("after train")
 
     if args.save:
-        torch.save(model, f"out/results/{out_file_base_name}_model.pt")
-        torch.save(model.state_dict(), f"out/results/{out_file_base_name}_model_statedict.pt")
+        if args.output is None:
+            model_out_file = f"out/results/{out_file_base_name}_model.pt"
+        else:
+            model_out_file = args.output_model
+            if not model_out_file.endswith(".pt"):
+                model_out_file += ".pt"
+        print(f"Saving model to {model_out_file} and {model_out_file.replace('.pt', '_statedict.pt')}")
+        
+        torch.save(model, model_out_file)
+        torch.save(model.state_dict(), model_out_file.replace(".pt", "_statedict.pt"))
     
     model = model.to(test_device)
     model.eval()
@@ -367,10 +376,15 @@ if __name__ == "__main__":
     print("| Finished all folds! |")
     print("=======================\n")
 
-    if args.save:
-        print("Writing results to disk...")
-        adata_full.write_h5ad(filename=f"out/results/{out_file_base_name}_results.h5ad", compression="gzip")
-        print("Done writing results to disk. Filename: ", f"out/results/{out_file_base_name}_results.h5ad")
+    # if args.save:
+    #     if args.output is None:
+    #         out_file = f"out/results/{out_file_base_name}_results.h5ad"
+    #     else:
+    #         out_file = args.output
+
+    #     print("Writing results to disk...")
+    #     adata_full.write_h5ad(filename=out_file, compression="gzip")
+    #     print(f"Done writing results to disk. Filename: {out_file}")
 
     mem("after EVERYTHING")
     print("\nEverything done!\n")
