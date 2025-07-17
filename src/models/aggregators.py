@@ -131,7 +131,7 @@ class SelfAttentionAggregator(nn.Module):
             # print(x_batch.shape)
 
             # Self-attention mechanism
-            attn_output, _ = self.multihead_attn(x_batch, x_batch, x_batch)
+            attn_output, _ = self.multihead_attn(x_batch, x_batch, x_batch)  # TODO: I think Q can be just the cls token here.
 
             # Extract the CLS token output
             cls_output = attn_output[0]  # [1, embed_dim]
