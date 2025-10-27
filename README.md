@@ -1,7 +1,6 @@
 # scAGG: Sample-level embedding and classification of Alzheimer’s disease from single-nucleus data
 
-The repository contains the code corresponding to the paper that is now available as preprint at: https://www.biorxiv.org/content/10.1101/2025.01.28.635240v1.abstract
-
+The repository contains the code corresponding to the paper that was published in the Computational and Structural Biotechnology Journal: https://doi.org/10.1016/j.csbj.2025.08.009
 Below, we provide instructions for reproducing the results presented in the paper.
 
 ## Setup
