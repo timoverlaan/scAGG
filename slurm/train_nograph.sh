@@ -43,7 +43,7 @@ apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 	--bind out/:/opt/app/out/ \
 	scAGG_container.sif pixi run python src/train.py \
 		--dataset data/lieke/${DATASET} \
-		--metadata data/rosmap_meta/ROSMAP_clinical.csv \
+		--metadata data/rosmap_meta/rosmap_ext_wang.csv \
 		--meta-sample-col projid \
 		--n-epochs 2 \
 		--dim 32 \
@@ -52,7 +52,7 @@ apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 		--dropout 0.1 \
 		--learning-rate 0.001 \
 		--pooling mean \
-		--label wang \
+		--label Wang \
 		--n_splits 5 \
 		--no-graph \
 		--verbose \
@@ -67,7 +67,7 @@ apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 	--bind out/:/opt/app/out/ \
 	scAGG_container.sif pixi run python src/train_full.py \
 		--dataset data/lieke/${DATASET} \
-		--metadata data/rosmap_meta/ROSMAP_clinical.csv \
+		--metadata data/rosmap_meta/rosmap_ext_wang.csv \
 		--meta-sample-col projid \
 		--n-epochs 2 \
 		--dim 32 \
@@ -76,7 +76,7 @@ apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 		--dropout 0.1 \
 		--learning-rate 0.001 \
 		--pooling mean \
-		--label wang \
+		--label Wang \
 		--no-graph \
 		--verbose \
 		--save \
