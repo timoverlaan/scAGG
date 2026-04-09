@@ -44,8 +44,10 @@ parser.add_argument('--test-interval', type=int, default=-1, help='Test epoch in
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph baseline model')
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
-parser.add_argument('--metadata', type=str, default=None, help='Path to a CSV with donor-level metadata. Must contain a "Donor ID" column. All other columns are merged into adata.obs and can be used as --label.')
+parser.add_argument('--metadata', type=str, default=None, help='Path to a CSV or Excel file with donor-level metadata. Must contain a "Donor ID" column (or the column specified by --meta-sample-col). All other columns are merged into adata.obs and can be used as --label.')
+parser.add_argument('--meta-sample-col', type=str, default="Donor ID", help='Column name in the metadata file that contains the donor/sample IDs (default: "Donor ID")')
 parser.add_argument("--output", type=str, default=None, help="Output file name for the results. If not provided, it will be generated based on the hyperparameters and timestamp.")
+parser.add_argument('--downsample', type=float, default=1.0, help='Fraction of cells to keep per donor (e.g. 0.9 keeps 90%%, drops 10%%)')
 
 
 def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
@@ -72,14 +74,30 @@ if __name__ == "__main__":
     adata = ad.read_h5ad(filename=args.dataset)
 
     if args.metadata is not None:
-        metadata = pd.read_csv(args.metadata)
-        if "Donor ID" not in metadata.columns:
-            raise ValueError(f"--metadata CSV must contain a 'Donor ID' column. Found: {metadata.columns.tolist()}")
-        metadata = metadata.set_index("Donor ID")
+        if args.metadata.endswith(".xlsx") or args.metadata.endswith(".xls"):
+            metadata = pd.read_excel(args.metadata)
+        else:
+            metadata = pd.read_csv(args.metadata)
+        sample_col = args.meta_sample_col
+        if sample_col not in metadata.columns:
+            raise ValueError(f"--metadata file must contain a '{sample_col}' column. Found: {metadata.columns.tolist()}")
+        metadata = metadata.set_index(sample_col)
         for col in metadata.columns:
             adata.obs[col] = adata.obs["Donor ID"].map(metadata[col])
         if args.verbose:
             print(f"Loaded metadata from {args.metadata}, merged columns: {metadata.columns.tolist()}")
+
+    if args.downsample < 1.0:
+        rng = np.random.default_rng(seed=42)
+        keep_idx = []
+        for donor_id in adata.obs["Donor ID"].unique():
+            donor_mask = np.where(adata.obs["Donor ID"] == donor_id)[0]
+            n_keep = max(1, int(len(donor_mask) * args.downsample))
+            keep_idx.append(rng.choice(donor_mask, size=n_keep, replace=False))
+        keep_idx = np.concatenate(keep_idx)
+        keep_idx.sort()
+        print(f"Downsampling: keeping {len(keep_idx)}/{adata.n_obs} cells ({args.downsample:.0%})")
+        adata = adata[keep_idx].copy()
 
     # NOTE: below are a bunch of steps that should ideally be moved to a processing script instead.
 
@@ -198,18 +216,29 @@ if __name__ == "__main__":
         adata.obs["Label"] = adata.obs[args.label]  # Use the label as is
     
     donor_labels = adata.obs.groupby("Donor ID").first()["Label"]
+    n_nan_cells = adata.obs["Label"].isna().sum()
+    if n_nan_cells > 0:
+        n_nan_donors = adata.obs.loc[adata.obs["Label"].isna(), "Donor ID"].nunique()
+        print(f"WARNING: {n_nan_donors} donors ({n_nan_cells} cells) have missing labels and will be excluded.")
+        adata = adata[adata.obs["Label"].notna()].copy()
     print(f"Using labels: {args.label}")
     print(adata.obs["Label"].value_counts())
-    
+
     if task == "classification":
-        # If specified, we drop "Other" donors here
         adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
-        if "AD" in adata.obs["Label"].unique() and "CT" in adata.obs["Label"].unique():
+        unique_labels = adata.obs["Label"].unique()
+        if "AD" in unique_labels and "CT" in unique_labels:
             adata = adata[adata.obs["Label"].isin(["AD", "CT"])].copy()
             adata.obs["y"] = adata.obs["Label"].map({"AD": 1, "CT": 0})
-        if 0 in adata.obs["Label"].unique() and 1 in adata.obs["Label"].unique():
+        elif 0 in unique_labels and 1 in unique_labels:
             adata = adata[adata.obs["Label"].isin([0, 1])].copy()
             adata.obs["y"] = adata.obs["Label"]
+        else:
+            # Generic binary classification: use the two most common labels
+            top2 = adata.obs["Label"].value_counts().index[:2].tolist()
+            print(f"Using top-2 labels as binary classes: {top2[0]} (positive) vs {top2[1]} (negative)")
+            adata = adata[adata.obs["Label"].isin(top2)].copy()
+            adata.obs["y"] = (adata.obs["Label"] == top2[0]).astype(int)
     else:
         adata_full = adata
         if args.label in ["amyloid", "plaq_n_mf"]:

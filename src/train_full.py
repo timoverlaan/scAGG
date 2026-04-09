@@ -42,6 +42,7 @@ parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph bas
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
 parser.add_argument('--output', type=str, default=None, help='Output file name for the results')
 parser.add_argument('--output-model', type=str, default=None, help='Output file name for the model')
+parser.add_argument('--downsample', type=float, default=1.0, help='Fraction of cells to keep per donor (e.g. 0.9 keeps 90%%, drops 10%%)')
 
 
 def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
@@ -66,6 +67,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     adata = ad.read_h5ad(filename=args.dataset)
+
+    if args.downsample < 1.0:
+        rng = np.random.default_rng(seed=42)
+        keep_idx = []
+        for donor_id in adata.obs["Donor ID"].unique():
+            donor_mask = np.where(adata.obs["Donor ID"] == donor_id)[0]
+            n_keep = max(1, int(len(donor_mask) * args.downsample))
+            keep_idx.append(rng.choice(donor_mask, size=n_keep, replace=False))
+        keep_idx = np.concatenate(keep_idx)
+        keep_idx.sort()
+        print(f"Downsampling: keeping {len(keep_idx)}/{adata.n_obs} cells ({args.downsample:.0%})")
+        adata = adata[keep_idx].copy()
 
     # NOTE: below are a bunch of steps that should ideally be moved to a processing script instead.
 
