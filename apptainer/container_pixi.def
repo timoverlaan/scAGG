@@ -1,10 +1,10 @@
 # Header
 Bootstrap: docker
-From: ghcr.io/prefix-dev/pixi:0.34.0
+From: ghcr.io/prefix-dev/pixi:0.67.0
 
 # Files
 %files
-    pyproject.toml /opt/app/pyproject.toml
+    pixi.toml /opt/app/pixi.toml
     pixi.lock /opt/app/pixi.lock
 
 # Install dependencies
@@ -14,7 +14,8 @@ From: ghcr.io/prefix-dev/pixi:0.34.0
 
     cd /opt/app
 
-    # Setup pixi dependencies (doesn't work yet...)
+    # Setup pixi dependencies
+    rm -rf /root/.cache/rattler
     pixi install
     
     # Clean up

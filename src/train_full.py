@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import anndata as ad
 import torch
 import argparse
@@ -40,6 +41,8 @@ parser.add_argument('--verbose', action="store_true", help='Verbose')
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph baseline model')
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
+parser.add_argument('--metadata', type=str, default=None, help='Path to a CSV or Excel file with donor-level metadata. Must contain a "Donor ID" column (or the column specified by --meta-sample-col). All other columns are merged into adata.obs and can be used as --label.')
+parser.add_argument('--meta-sample-col', type=str, default="Donor ID", help='Column name in the metadata file that contains the donor/sample IDs (default: "Donor ID")')
 parser.add_argument('--output', type=str, default=None, help='Output file name for the results')
 parser.add_argument('--output-model', type=str, default=None, help='Output file name for the model')
 parser.add_argument('--downsample', type=float, default=1.0, help='Fraction of cells to keep per donor (e.g. 0.9 keeps 90%%, drops 10%%)')
@@ -67,6 +70,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     adata = ad.read_h5ad(filename=args.dataset)
+
+    if args.metadata is not None:
+        if args.metadata.endswith(".xlsx") or args.metadata.endswith(".xls"):
+            metadata = pd.read_excel(args.metadata)
+        else:
+            metadata = pd.read_csv(args.metadata)
+        sample_col = args.meta_sample_col
+        if sample_col not in metadata.columns:
+            raise ValueError(f"--metadata file must contain a '{sample_col}' column. Found: {metadata.columns.tolist()}")
+        metadata = metadata.set_index(sample_col)
+        for col in metadata.columns:
+            adata.obs[col] = adata.obs["Donor ID"].map(metadata[col])
+        if args.verbose:
+            print(f"Loaded metadata from {args.metadata}, merged columns: {metadata.columns.tolist()}")
 
     if args.downsample < 1.0:
         rng = np.random.default_rng(seed=42)
@@ -389,15 +406,14 @@ if __name__ == "__main__":
     print("| Finished all folds! |")
     print("=======================\n")
 
-    # if args.save:
-    #     if args.output is None:
-    #         out_file = f"out/results/{out_file_base_name}_results.h5ad"
-    #     else:
-    #         out_file = args.output
-
-    #     print("Writing results to disk...")
-    #     adata_full.write_h5ad(filename=out_file, compression="gzip")
-    #     print(f"Done writing results to disk. Filename: {out_file}")
+    if args.save or args.output is not None:
+        if args.output is None:
+            out_file = f"out/results/{out_file_base_name}_results.h5ad"
+        else:
+            out_file = args.output
+        print("Writing results to disk...")
+        adata_full.write_h5ad(filename=out_file, compression="gzip")
+        print(f"Done writing results to disk. Filename: {out_file}")
 
     mem("after EVERYTHING")
     print("\nEverything done!\n")

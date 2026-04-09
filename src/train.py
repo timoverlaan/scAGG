@@ -4,6 +4,7 @@ import anndata as ad
 import torch
 import argparse
 import gc
+import json
 
 from datetime import datetime
 from tqdm import tqdm, trange
@@ -415,7 +416,11 @@ if __name__ == "__main__":
         gc.collect(), torch.cuda.empty_cache(), mem("after train")
 
         if args.save:
-            torch.save(model.state_dict(), f"out/results/{out_file_base_name}_model_fold{split_i}.pt")
+            if args.output is not None:
+                model_fold_path = args.output.replace(".h5ad", f"_model_fold{split_i}.pt")
+            else:
+                model_fold_path = f"out/results/{out_file_base_name}_model_fold{split_i}.pt"
+            torch.save(model.state_dict(), model_fold_path)
         
         model = model.to(test_device)
         model.eval()
@@ -481,6 +486,21 @@ if __name__ == "__main__":
             outfile = args.output
         adata_full.write_h5ad(filename=outfile, compression="gzip")
         print("Done writing results to disk. Filename: ", outfile)
+
+        # Save per-fold and summary metrics to JSON
+        metrics = {"hp": hp, "args": vars(args), "folds": {}}
+        for i in range(args.n_splits):
+            metrics["folds"][i] = {"test": adata.uns.get(f"perf_test_f{i}", {})}
+            if f"perf_train_f{i}" in adata.uns:
+                metrics["folds"][i]["train"] = adata.uns[f"perf_train_f{i}"]
+        metrics["mean_test"] = dict(adata.uns.get("perf_test_mean", {}))
+        metrics["std_test"] = dict(adata.uns.get("perf_test_std", {}))
+        metrics["mean_train"] = dict(adata.uns.get("perf_train_mean", {}))
+        metrics["std_train"] = dict(adata.uns.get("perf_train_std", {}))
+        json_outfile = outfile.replace(".h5ad", "_metrics.json")
+        with open(json_outfile, "w") as f:
+            json.dump(metrics, f, indent=2, default=str)
+        print(f"Saved metrics to {json_outfile}")
 
     mem("after EVERYTHING")
     print("\nEverything done!\n")
