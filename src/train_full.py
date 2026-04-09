@@ -329,7 +329,7 @@ if __name__ == "__main__":
     if task == "regression":
         criterion = torch.nn.MSELoss(reduction='sum')
     else:
-        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+        criterion = lambda y_pred, y_true: -torch.sum(y_true * torch.log(y_pred.clamp(min=1e-8)))
 
     max_batches = 1000
     n_batches = adata.n_obs // hp["batch_size"] + 1

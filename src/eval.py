@@ -207,7 +207,7 @@ if __name__ == "__main__":
     if task == "regression":
         criterion = torch.nn.MSELoss(reduction='sum')
     else:
-        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+        criterion = lambda y_pred, y_true: -torch.sum(y_true * torch.log(y_pred.clamp(min=1e-8)))
 
     gc.collect(), torch.cuda.empty_cache(), mem("after train")
     

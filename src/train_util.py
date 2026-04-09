@@ -651,7 +651,7 @@ def train_model(
         weight_decay=hp["wd"],
     )
 
-    criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+    criterion = lambda y_pred, y_true: -torch.sum(y_true * torch.log(y_pred.clamp(min=1e-8)))
 
     n_batches = train_adata.n_obs // hp["batch_size"] + 1
     if verbose:

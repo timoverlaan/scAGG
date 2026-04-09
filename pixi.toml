@@ -1,4 +1,4 @@
-[project]
+[workspace]
 authors = ["DarthTimothee <timoverlaan@gmail.com>"]
 channels = ["nvidia", "conda-forge", "pytorch", "bioconda", "pyg"]
 description = "scAGG: Sample-level embedding and classification of Alzheimer's disease from single-nucleus data"

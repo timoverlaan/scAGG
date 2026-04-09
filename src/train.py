@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import anndata as ad
 import torch
 import argparse
@@ -43,6 +44,7 @@ parser.add_argument('--test-interval', type=int, default=-1, help='Test epoch in
 parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
 parser.add_argument('--no-graph', action="store_true", help='Use the NoGraph baseline model')
 parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
+parser.add_argument('--metadata', type=str, default=None, help='Path to a CSV with donor-level metadata. Must contain a "Donor ID" column. All other columns are merged into adata.obs and can be used as --label.')
 parser.add_argument("--output", type=str, default=None, help="Output file name for the results. If not provided, it will be generated based on the hyperparameters and timestamp.")
 
 
@@ -68,6 +70,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     adata = ad.read_h5ad(filename=args.dataset)
+
+    if args.metadata is not None:
+        metadata = pd.read_csv(args.metadata)
+        if "Donor ID" not in metadata.columns:
+            raise ValueError(f"--metadata CSV must contain a 'Donor ID' column. Found: {metadata.columns.tolist()}")
+        metadata = metadata.set_index("Donor ID")
+        for col in metadata.columns:
+            adata.obs[col] = adata.obs["Donor ID"].map(metadata[col])
+        if args.verbose:
+            print(f"Loaded metadata from {args.metadata}, merged columns: {metadata.columns.tolist()}")
 
     # NOTE: below are a bunch of steps that should ideally be moved to a processing script instead.
 
@@ -233,8 +245,8 @@ if __name__ == "__main__":
             sums += chunk.sum(axis=0)
             sum_sqs += (np.power(chunk, 2)).sum(axis=0)
 
-        means = sums / adata.shape[0]
-        stds = np.sqrt(sum_sqs / adata.shape[0] - np.power(means, 2))
+        means = sums / train_adata.shape[0]
+        stds = np.sqrt(sum_sqs / train_adata.shape[0] - np.power(means, 2))
         stds[stds == 0] = 1
         means = torch.tensor(means, dtype=torch.float32)
         stds = torch.tensor(stds, dtype=torch.float32)
@@ -247,12 +259,7 @@ if __name__ == "__main__":
             print(f"Test balance p(AD)={test_bal:.3f}")
 
             if args.batch_stratify_sex:
-                class_weight = {
-                    adata.obs["Label"].unique()[0]: { 0: 0, 1: 0, },
-                    adata.obs["Label"].unique()[1]: { 0: 0, 1: 0, }
-                }
-                for donor_id in train_donors:
-                    class_weight[donor_labels[donor_id]][donor_sex[donor_id]] += 1
+                raise NotImplementedError("--batch-stratify-sex is not yet implemented")
 
             else:  # Only stratify on class label
                 class_weight = {
@@ -269,11 +276,7 @@ if __name__ == "__main__":
             #   so large graphs are not sampled from more frequently.
             donor_weights = dict()
             for donor_id in train_donors:
-                if args.batch_stratify_sex:
-                    # label_weight = 1 / class_weight[donor_labels[donor_id]][donor_sex[donor_id]]
-                    pass
-                else:
-                    donor_weights[donor_id] = 1000 / donor_counts[donor_id]
+                donor_weights[donor_id] = 1000 / donor_counts[donor_id]
             sample_weights = torch.tensor([donor_weights[donor_id] for donor_id in train_adata.obs["Donor ID"]], dtype=torch.float32)
 
         if task == "regression":
@@ -352,7 +355,7 @@ if __name__ == "__main__":
         if task == "regression":
             criterion = torch.nn.MSELoss(reduction='sum')
         else:
-            criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+            criterion = lambda y_pred, y_true: -torch.sum(y_true * torch.log(y_pred.clamp(min=1e-8)))
 
         max_batches = 1000
         n_batches = train_adata.n_obs // hp["batch_size"] + 1

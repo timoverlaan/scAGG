@@ -169,7 +169,7 @@ def run(adata: ad.AnnData, hp: dict, n_splits: int) -> dict:
             weight_decay=hp["wd"],
         )
 
-        criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+        criterion = lambda y_pred, y_true: -torch.sum(y_true * torch.log(y_pred.clamp(min=1e-8)))
             
         # Train the model
         for epoch in range(hp["n_epochs"]):

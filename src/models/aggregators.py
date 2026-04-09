@@ -98,7 +98,7 @@ class EasyAttentionAggregator(nn.Module):
 class SelfAttentionAggregator(nn.Module):
     def __init__(self, embed_dim, heads: int, cat: bool = False):
         super(SelfAttentionAggregator, self).__init__()
-        self.cat = False  ## CAT ignored!
+        self.cat = cat
         self.embed_dim = embed_dim
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))  # [1, 1, embed_dim]
         self.multihead_attn = nn.MultiheadAttention(embed_dim, heads)
