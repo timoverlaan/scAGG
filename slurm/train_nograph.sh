@@ -1,6 +1,6 @@
 #!/bin/sh
-#SBATCH --account=testusers
-#SBATCH --partition=all
+#SBATCH --partition=general
+#SBATCH --qos=short
 #SBATCH --time=4:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
