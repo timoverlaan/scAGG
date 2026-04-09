@@ -213,19 +213,29 @@ if __name__ == "__main__":
         adata.obs["Label"] = adata.obs[args.label]  # Use the label as is
     
     donor_labels = adata.obs.groupby("Donor ID").first()["Label"]
-
+    n_nan_cells = adata.obs["Label"].isna().sum()
+    if n_nan_cells > 0:
+        n_nan_donors = adata.obs.loc[adata.obs["Label"].isna(), "Donor ID"].nunique()
+        print(f"WARNING: {n_nan_donors} donors ({n_nan_cells} cells) have missing labels and will be excluded.")
+        adata = adata[adata.obs["Label"].notna()].copy()
     print(f"Using labels: {args.label}")
     print(adata.obs["Label"].value_counts())
-    
+
     if task == "classification":
-        # If specified, we drop "Other" donors here to make training easier
         adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
-        if "AD" in adata.obs["Label"].unique() and "CT" in adata.obs["Label"].unique():
+        unique_labels = adata.obs["Label"].unique()
+        if "AD" in unique_labels and "CT" in unique_labels:
             adata = adata[adata.obs["Label"].isin(["AD", "CT"])].copy()
             adata.obs["y"] = adata.obs["Label"].map({"AD": 1, "CT": 0})
-        if 0 in adata.obs["Label"].unique() and 1 in adata.obs["Label"].unique():
+        elif 0 in unique_labels and 1 in unique_labels:
             adata = adata[adata.obs["Label"].isin([0, 1])].copy()
             adata.obs["y"] = adata.obs["Label"]
+        else:
+            # Generic binary classification: use the two most common labels
+            top2 = adata.obs["Label"].value_counts().index[:2].tolist()
+            print(f"Using top-2 labels as binary classes: {top2[0]} (positive) vs {top2[1]} (negative)")
+            adata = adata[adata.obs["Label"].isin(top2)].copy()
+            adata.obs["y"] = (adata.obs["Label"] == top2[0]).astype(int)
     else:
         adata_full = adata
         if args.label in ["amyloid", "plaq_n_mf"]:
