@@ -222,20 +222,21 @@ if __name__ == "__main__":
     print(adata.obs["Label"].value_counts())
 
     if task == "classification":
-        adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
         unique_labels = adata.obs["Label"].unique()
         if "AD" in unique_labels and "CT" in unique_labels:
-            adata = adata[adata.obs["Label"].isin(["AD", "CT"])].copy()
-            adata.obs["y"] = adata.obs["Label"].map({"AD": 1, "CT": 0})
+            keep_labels = ["AD", "CT"]
+            adata.obs["y"] = adata.obs["Label"].map({"AD": 1, "CT": 0}).astype(float)
         elif 0 in unique_labels and 1 in unique_labels:
-            adata = adata[adata.obs["Label"].isin([0, 1])].copy()
-            adata.obs["y"] = adata.obs["Label"]
+            keep_labels = [0, 1]
+            adata.obs["y"] = adata.obs["Label"].where(adata.obs["Label"].isin([0, 1])).astype(float)
         else:
             # Generic binary classification: use the two most common labels
             top2 = adata.obs["Label"].value_counts().index[:2].tolist()
             print(f"Using top-2 labels as binary classes: {top2[0]} (positive) vs {top2[1]} (negative)")
-            adata = adata[adata.obs["Label"].isin(top2)].copy()
-            adata.obs["y"] = (adata.obs["Label"] == top2[0]).astype(int)
+            keep_labels = top2
+            adata.obs["y"] = adata.obs["Label"].map({top2[0]: 1.0, top2[1]: 0.0}).astype(float)
+        adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
+        adata = adata[adata.obs["Label"].isin(keep_labels)].copy()
     else:
         adata_full = adata
         if args.label in ["amyloid", "plaq_n_mf"]:
