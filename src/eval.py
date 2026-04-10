@@ -1,43 +1,98 @@
-import numpy as np
-import anndata as ad
-import pandas as pd
-import torch
+"""Evaluate a trained scAGG model on an external validation h5ad.
+
+Loads a model saved by train_full.py (full model object via torch.save),
+runs inference per donor, and writes performance metrics to JSON.
+
+The validation h5ad is expected to have:
+  - a "Donor ID" column in obs
+  - the column named by --label-col with values matching --positive-label
+    and --negative-label (defaults: "Wang", "AD", "Healthy")
+  - optionally, a boolean --intermediate-col flagging donors to exclude
+    from metric computation (default: "Wang_intermediate")
+"""
 import argparse
 import gc
+import json
 
-from datetime import datetime
-from tqdm import tqdm, trange
-from torch_geometric.loader import DataLoader as PygDataLoader
-from torch_geometric.loader import NeighborLoader as PygNeighborLoader
-from torch_geometric.loader import NodeLoader, RandomNodeLoader
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
-from torch.utils.data import WeightedRandomSampler, DataLoader
-# from torchinfo import summary
+import anndata as ad
+import numpy as np
+import torch
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
-from train_util import _test_epoch, _train_epoch, generate_embeddings, mem
-from dataset.GraphDataset import GraphDataset
-from dataset.Dataset import Dataset
-from models.CellGAT import CellGAT
-from models.NoGraph import NoGraph
-from dataset.split import adata_kfold_split
+from train_util import generate_embeddings, mem
 
 
-parser = argparse.ArgumentParser(description='Train a model on a dataset.')
-parser.add_argument('--dataset', type=str, help='Path to the dataset (.h5ad)')
-parser.add_argument('--model', type=str, required=True, help="Path to saved model (.pt) to load for evaluation")
-parser.add_argument('--save-attention', action="store_true", help='Save the attention scores?')
-parser.add_argument('--save-embeddings', action="store_true", help='Save the embeddings?')
-parser.add_argument('--verbose', action="store_true", help='Verbose')
-parser.add_argument('--label', type=str, default="cogdx", help='Label type [cogdx, raegan, raegan-no-intermediate, wang]')
-parser.add_argument('--batch-stratify-sex', action="store_true", help='Stratify the batches also based on sex, to regress this out')
-parser.add_argument('--output', type=str, default=None, help='Output file name for the results')
+parser = argparse.ArgumentParser(description="Evaluate a trained scAGG model on an external validation set.")
+parser.add_argument("--dataset", type=str, required=True, help="Path to validation dataset (.h5ad)")
+parser.add_argument("--model", type=str, required=True, help="Path to saved full model (.pt)")
+parser.add_argument("--label-col", type=str, default="Wang", help="obs column with binary label (default: Wang)")
+parser.add_argument("--intermediate-col", type=str, default="Wang_intermediate", help="obs column flagging excluded donors")
+parser.add_argument("--positive-label", type=str, default="AD", help="Value of label-col treated as positive class")
+parser.add_argument("--negative-label", type=str, default="Healthy", help="Value of label-col treated as negative class")
+parser.add_argument("--compute-wang", action="store_true", help="Compute Wang labels from raw SeaAD obs columns ('Cognitive Status', 'Braak', 'CERAD score') and write them to --label-col / --intermediate-col before evaluation")
+parser.add_argument("--save-embeddings", action="store_true", help="Save embeddings + h5ad output")
+parser.add_argument("--save-attention", action="store_true", help="Save attention scores")
+parser.add_argument("--output", type=str, default=None, help="Output h5ad path (only used with --save-embeddings)")
+parser.add_argument("--output-metrics", type=str, default=None, help="Output JSON metrics path (default: derived from --output or --model)")
+parser.add_argument("--verbose", action="store_true")
 
-def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict:
+
+SEAAD_BRAAK_MAP = {
+    "Braak 0": 0, "Braak I": 1, "Braak II": 2, "Braak III": 3,
+    "Braak IV": 4, "Braak V": 5, "Braak VI": 6,
+}
+SEAAD_CERAD_MAP = {  # ROSMAP convention: 1=worst (Frequent), 4=best (Absent)
+    "Frequent": 1, "Moderate": 2, "Sparse": 3, "Absent": 4,
+}
+SEAAD_COGDX_MAP = {"Dementia": 4, "No dementia": 1}
+
+
+def compute_wang_labels(adata: ad.AnnData, label_col: str, intermediate_col: str,
+                        positive_label: str, negative_label: str) -> None:
+    """Derive donor-level Wang labels from raw SeaAD columns and write them
+    to adata.obs[label_col] and adata.obs[intermediate_col] in place.
+
+    Mirrors the rule used in train_full.py for ROSMAP, but operates on
+    SeaAD's string-valued 'Cognitive Status' / 'Braak' / 'CERAD score'.
     """
-    Calculate the performance of the model on the test set of the fold.
-    """
-    y_true = np.array([adata[adata.obs["Donor ID"] == donor_id].obs["y"].mean() for donor_id in donors], dtype=int)    
-    y_pred = np.concatenate([adata.uns[f"y_pred_graph_f{split_i}"][str(donor_id)] for donor_id in donors])
+    required = ["Cognitive Status", "Braak", "CERAD score", "Donor ID"]
+    missing = [c for c in required if c not in adata.obs.columns]
+    if missing:
+        raise ValueError(f"--compute-wang needs obs columns {required}; missing: {missing}")
+
+    donor_df = adata.obs.groupby("Donor ID", observed=True).first()
+    cogdx = donor_df["Cognitive Status"].map(SEAAD_COGDX_MAP)
+    braaksc = donor_df["Braak"].map(SEAAD_BRAAK_MAP)
+    ceradsc = donor_df["CERAD score"].map(SEAAD_CERAD_MAP)
+
+    is_ad = (cogdx == 4) & (braaksc >= 4) & (ceradsc <= 2)
+    is_ct = (cogdx == 1) & (braaksc <= 3) & (ceradsc >= 3)
+
+    donor_label = np.where(is_ad, positive_label,
+                  np.where(is_ct, negative_label, None))
+    donor_label_map = dict(zip(donor_df.index, donor_label))
+    donor_intermediate_map = {d: (donor_label_map[d] is None) for d in donor_df.index}
+
+    adata.obs[label_col] = adata.obs["Donor ID"].map(donor_label_map)
+    adata.obs[intermediate_col] = adata.obs["Donor ID"].map(donor_intermediate_map).astype(bool)
+
+    n_ad = int(is_ad.sum())
+    n_ct = int(is_ct.sum())
+    n_int = int((~is_ad & ~is_ct).sum())
+    print(f"  computed Wang labels: {n_ad} {positive_label}, {n_ct} {negative_label}, {n_int} intermediate (out of {len(donor_df)} donors)")
+
+
+def calc_performance(adata: ad.AnnData, donors: list, donor_y_true: dict) -> dict:
+    """Compute classification metrics from generate_embeddings output."""
+    y_true = np.array([donor_y_true[d] for d in donors], dtype=int)
+    y_pred = np.concatenate([adata.uns["y_pred_graph_f0"][str(d)] for d in donors])
     y_pred_hard = np.argmax(y_pred, axis=1)
 
     return {
@@ -46,232 +101,119 @@ def calc_fold_performance(adata: ad.AnnData, split_i: int, donors: list) -> dict
         "recall": recall_score(y_true, y_pred_hard),
         "f1": f1_score(y_true, y_pred_hard),
         "roc_auc": roc_auc_score(y_true, y_pred[:, 1]),
+        "confusion_matrix": confusion_matrix(y_true, y_pred_hard).tolist(),
+        "n_donors": int(len(donors)),
+        "n_positive": int(y_true.sum()),
+        "n_negative": int(len(y_true) - y_true.sum()),
     }
 
 
-if __name__ == "__main__":
-
+def main():
     args = parser.parse_args()
 
+    print(f"Loading dataset {args.dataset}")
     adata = ad.read_h5ad(filename=args.dataset)
-    if args.verbose:
-        print(f"Loaded dataset {args.dataset} with {adata.n_obs} cells and {adata.n_vars} genes.")
+    print(f"  shape={adata.shape}, donors={adata.obs['Donor ID'].nunique()}")
 
-    # NOTE: below are a bunch of steps that should ideally be moved to a processing script instead.
+    if args.compute_wang:
+        compute_wang_labels(adata, args.label_col, args.intermediate_col,
+                            args.positive_label, args.negative_label)
 
-    # print("All celltypes", adata.obs["cell_type_high_resolution"].unique().tolist())
-    # print(adata.obs.keys().tolist())
-    # print("Major celltypes", adata.obs["Supertype"].unique().tolist())
-    # mic_celltypes = [ct for ct in adata.obs["cell_type_high_resolution"].unique() if "Mic" in ct or "Ast" in ct]
-    # print(f"Microglia cell types: {mic_celltypes}")
+    if args.label_col not in adata.obs.columns:
+        raise ValueError(
+            f"--label-col '{args.label_col}' not found in obs. "
+            f"Available: {list(adata.obs.columns)}"
+        )
 
-    # adata.obs["Celltype"] = adata.obs["Supertype"].map({
-    #     "Astrocytes": "Astrocytes",
-    #     "Excitatory_neurons_set1": "Excitatory_neurons",
-    #     "Excitatory_neurons_set2": "Excitatory_neurons",
-    #     "Excitatory_neurons_set3": "Excitatory_neurons",
-    #     "Immune_cells": "Immune_cells",
-    #     "Inhibitory_neurons": "Inhibitory_neurons",
-    #     "Oligodendrocytes": "Oligodendrocytes",
-    #     "OPCs": "OPCs",
-    #     "Vasculature_cells": "Vasculature_cells",
-    # })
-    
-    # adata_tmp = adata[adata.obs["Celltype"] == "OPCs"].copy()
-    # del adata
-    # adata = adata_tmp
+    # Build the binary y label.
+    label = adata.obs[args.label_col]
+    y_map = {args.positive_label: 1, args.negative_label: 0}
+    adata.obs["y"] = label.map(y_map).astype(float)
 
-    # For SeaAD, we have to make the metadata match first
-    # if "msex" not in adata.obs.columns:  
-    #     adata.obs["msex"] = adata.obs["Sex"].map({"Male": 1, "Female": 0})
-    # if "cogdx" not in adata.obs.columns:
-    #     adata.obs["cogdx"] = adata.obs["Label"].map({"AD": 4, "CT": 1})
-    # if "braaksc" not in adata.obs.columns:
-    #     adata.obs["braaksc"] = adata.obs["Braak"].map({"Braak 0": 0, "Braak I": 1, "Braak II": 2, "Braak III": 3, "Braak IV": 4, "Braak V": 5, "Braak VI": 6})
-    # if "ceradsc" not in adata.obs.columns:
-    #     adata.obs["ceradsc"] = adata.obs["CERAD score"].map({"Absent": 4, "Sparse": 3, "Moderate": 2, "Frequent": 1})
-
-    donor_counts = adata.obs["Donor ID"].value_counts()
-    # donor_sex = adata.obs.groupby("Donor ID").first()["msex"]
-
-    print("\nArguments:")
-    print(args)
-    
-    exp_start = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    out_file_base_name = f"{exp_start}_EVAL_{args.label}"
-    if args.verbose:
-        print(f"Experiment started at {exp_start}")
-
-    test_device = "cpu"
-
-    if args.label in ["braak", "amyloid", "ceradsc", "nft", "tangles", "plaq_n_mf"]:
-        task = "regression"
+    # Donors to score on: have a non-NaN y AND are not flagged as intermediate.
+    eval_mask = adata.obs["y"].notna()
+    if args.intermediate_col in adata.obs.columns:
+        intermediate = adata.obs[args.intermediate_col].astype(bool)
+        eval_mask &= ~intermediate
+        print(f"  excluding {intermediate.sum()} cells flagged as {args.intermediate_col}")
     else:
-        task = "classification"
+        print(f"  warning: '{args.intermediate_col}' not in obs; nothing excluded as intermediate")
 
-    # Remap the labels, based on provided argument
-    if args.label == "reagan":
-        # Remap labels based on the NIA-Reagan score
-        adata.obs["Label"] = adata.obs["niareagansc"].map({1: "AD", 2: "AD", 3: "CT", 4: "CT"})
-    elif args.label == "reagan-no-intermediate":
-        # Remap labels based on the NIA-Reagan score
-        adata.obs["Label"] = adata.obs["niareagansc"].map({1: "AD", 2: "Other", 3: "CT", 4: "CT"})
-    elif args.label == "wang":
-        # Remap labels based on the @Wang2022 approach
-        df = adata.obs.groupby("Donor ID").first()
-        wang_labels = dict()
-        for i in df.index:
-            if df.loc[i]["cogdx"] == 4 and df.loc[i]["braaksc"] >= 4 and df.loc[i]["ceradsc"] <= 2:
-                wang_labels[i] = "AD"
-            elif df.loc[i]["cogdx"] == 1 and df.loc[i]["braaksc"] <= 3 and df.loc[i]["ceradsc"] >= 3:
-                wang_labels[i] = "CT"
-            else:
-                wang_labels[i] = "Other"
-        cell_labels = np.empty(adata.n_obs, dtype=object)
-        for donor, label in wang_labels.items():
-            cell_labels[adata.obs["Donor ID"] == donor] = label
-        adata.obs["Label"] = cell_labels
+    adata_full = adata
+    adata_eval = adata[eval_mask].copy()
 
-    elif args.label == "braak":
-        adata.obs["Label"] = adata.obs["braaksc"]  # (0-6)
+    eval_donors = adata_eval.obs["Donor ID"].unique().tolist()
+    print(f"  scoring on {len(eval_donors)} donors (out of {adata_full.obs['Donor ID'].nunique()} total)")
+    print(f"  class balance on eval set: {adata_eval.obs['y'].value_counts().to_dict()}")
 
+    # Donor-level true labels, taken from the (NaN-free) eval slice. Used for
+    # metric computation independently of whatever y values end up on the
+    # full adata that may also pass through generate_embeddings.
+    donor_y_true = adata_eval.obs.groupby("Donor ID", observed=True)["y"].first().astype(int).to_dict()
 
-    elif args.label in ["amyloid", "ceradsc", "amyloid", "nft", "tangles", "plaq_n_mf"]:
-        # We do regression, because this is a continuous variable
-        adata.obs["Label"] = adata.obs[args.label]  # (0-6)
+    device = "cpu"  # eval is small enough; safest default
 
-    elif args.label == "cogdx":
-        # Remap labels based on the cognitive diagnosis
-        adata.obs["Label"] = adata.obs["cogdx"].map({1: "CT", 2: "CT", 3: "CT", 4: "AD", 5: "AD"})
+    print(f"Loading model from {args.model}")
+    model = torch.load(args.model, map_location=device, weights_only=False)
+    model = model.to(device)
+    model.eval()
 
-    else:
-        adata.obs["Label"] = adata.obs[args.label]  # Use the label as is
-    
-    donor_labels = adata.obs.groupby("Donor ID").first()["Label"]
+    # The saved model has its training-time means/stds baked in as Parameters,
+    # so we don't recompute them on the validation set.
+    if hasattr(model, "means") and model.means is not None:
+        if model.means.shape[1] != adata_full.shape[1]:
+            raise ValueError(
+                f"Gene dim mismatch: model expects {model.means.shape[1]} genes, "
+                f"dataset has {adata_full.shape[1]}"
+            )
 
-    print(f"Using labels: {args.label}")
-    print(adata.obs["Label"].value_counts())
-
-    adata.obs["y"] = adata.obs["Wang"].map({"AD": 1, "Healthy": 0, "Intermediate": 1}).astype(int)
-    # TODO: not very happy with setting them to 1, but for the performanc this shouldn't matter,
-    # because they will be sliced out.
-
-    # If specified, we drop "Other" donors here to make training easier
-    adata_full = adata  # Keep this, because we want embeddings for "intermediate" donors as well
-
-    adata = adata[~adata.obs["Wang_intermediate"]].copy()  # Drop the intermediate donors, if specified
-
-    ALL_DONORS = adata.obs["Donor ID"].unique().tolist()
-
-    # Below we incrementally calculate the means and stds for normalization for the training data.
-    # Why don't we directly apply it? Because we want to keep the data sparse as much as possible, 
-    #   and when standardizing, we lose the zeros.
-    # So instead, we calculate the mean and std here, and then apply it in the forward pass of the model.
-    print("Calculating means and stds for normalization...")
-    sums = np.zeros((1, adata.shape[1]))
-    sum_sqs = np.zeros((1, adata.shape[1]))
-    chunk_size = 10000
-    for i in trange(0, adata.shape[0], chunk_size):
-
-        chunk = adata.X[i:i+chunk_size].todense()
-        sums += chunk.sum(axis=0)
-        sum_sqs += (np.power(chunk, 2)).sum(axis=0)
-
-    means = sums / adata.shape[0]
-    stds = np.sqrt(sum_sqs / adata.shape[0] - np.power(means, 2))
-    stds[stds == 0] = 1
-    means = torch.tensor(means, dtype=torch.float32)
-    stds = torch.tensor(stds, dtype=torch.float32)
-    print("Done calculating means and stds for normalization.")
-
-    # The train data is loaded in batches from different donors, to provide regularization,
-    # and make sure the data fits in GPU memory.
-    # if not args.no_graph:
-    test_loader = PygDataLoader(
-        dataset=GraphDataset(adata=adata, test=True),
-        batch_size=1,
-        shuffle=False,
-        # num_workers=2,
+    # Run inference. We pass adata_full so embeddings are also generated for
+    # intermediate donors when --save-embeddings is set.
+    target = adata_full if args.save_embeddings else adata_eval
+    target = generate_embeddings(
+        target, model, device, {}, args, 0,
+        eval_donors,  # "test_donors"
+        [],            # "train_donors"
+        save_attention=args.save_attention,
     )
 
-    if args.verbose:
-        print("Train loader ready.")
+    perf = calc_performance(target, eval_donors, donor_y_true)
+    print("\nPerformance on validation set:")
+    for k, v in perf.items():
+        print(f"  {k}: {v}")
 
-    # Load the model
-    model = torch.load(args.model).to(test_device)
-    model.eval()
-
-    # summary(model)
-
-    # Define the loss function
-    if task == "regression":
-        criterion = torch.nn.MSELoss(reduction='sum')
-    else:
-        criterion = lambda y_pred, y_true: -torch.sum(y_true * torch.log(y_pred.clamp(min=1e-8)))
-
-    gc.collect(), torch.cuda.empty_cache(), mem("after train")
-    
-    model = model.to(test_device)
-    model.eval()
-
-    # Generate the embeddings
-    if args.save_embeddings or args.save_attention:
-        adata_full = generate_embeddings(adata_full, model, test_device, {}, args, 0, ALL_DONORS, [], save_attention=args.save_attention)
-        adata_full.uns[f"perf_test"] = calc_fold_performance(adata_full, 0, ALL_DONORS)
-
-    else:
-        adata = generate_embeddings(adata, model, test_device, {}, args, 0, ALL_DONORS, [], save_attention=args.save_attention)
-        adata_full.uns[f"perf_test"] = calc_fold_performance(adata, 0, ALL_DONORS)
-
-    del model
-
-    gc.collect(), torch.cuda.empty_cache(), mem("after test/embeddings")
-    print(f"\nPerformance:")
-    for k, v in adata_full.uns[f"perf_test"].items():
-        print(f"    {k}: {v}")
-    print()
-
-    # confusion matrix
-    print("Confusion matrix:")
-    from sklearn.metrics import confusion_matrix
-    y_pred = np.array([np.array(v).flatten()[1] for v in adata.uns[f"y_pred_graph_f0"].values()])
-    print(y_pred.shape, y_pred)
-    y_true = np.array([
-        adata_full[adata_full.obs["Donor ID"] == donor_id].obs["y"].mean() for donor_id in adata.uns[f"y_pred_graph_f0"].keys()
-    ])
-
-    print(f"y_true: {y_true.shape} --> {y_true[:10]}")
-    print(f"y_pred: {len(y_pred)} --> {y_pred[:10]}")
-    
-    cm = confusion_matrix(y_true, y_pred.round())
-    print(cm)
-    print()
-
-    # and plot the ROC
-    from sklearn.metrics import roc_curve, auc
-    fpr, tpr, _ = roc_curve(y_true, y_pred)
-    roc_auc = auc(fpr, tpr)
-    print(f"ROC AUC: {roc_auc}")
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.plot(fpr, tpr, color='blue', label=f'ROC curve (area = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='red', linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic')
-    plt.legend(loc='lower right')
-    plt.show()
-
-    if args.save_embeddings or args.save_attention or args.output is not None:
-        if args.output is None:
-            out_file = f"out/results/{out_file_base_name}_results.h5ad"
+    # Resolve output paths
+    metrics_out = args.output_metrics
+    if metrics_out is None:
+        if args.output is not None:
+            metrics_out = args.output.replace(".h5ad", "_metrics.json")
         else:
-            out_file = args.output
-        print("Writing results to disk...")
-        adata_full.write_h5ad(filename=out_file, compression="gzip")
-        print(f"Done writing results to disk. Filename: {out_file}")
+            metrics_out = args.model.replace(".pt", "_eval_metrics.json")
 
-    mem("after EVERYTHING")
-    print("\nEverything done!\n")
+    metrics = {
+        "dataset": args.dataset,
+        "model": args.model,
+        "args": vars(args),
+        "performance": perf,
+    }
+    with open(metrics_out, "w") as f:
+        json.dump(metrics, f, indent=2, default=str)
+    print(f"\nWrote metrics to {metrics_out}")
+
+    if args.save_embeddings or args.save_attention:
+        if args.output is None:
+            raise ValueError("--save-embeddings requires --output")
+        target.uns["perf_eval"] = perf
+        print(f"Writing h5ad to {args.output}")
+        target.write_h5ad(filename=args.output, compression="gzip")
+
+    del model, target
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    mem("after eval")
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()
