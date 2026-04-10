@@ -158,14 +158,48 @@ def main():
     model = model.to(device)
     model.eval()
 
-    # The saved model has its training-time means/stds baked in as Parameters,
-    # so we don't recompute them on the validation set.
+    # The means/stds baked into the saved model are a memory-saving trick used
+    # at training time: we z-score inputs lazily inside the forward pass so the
+    # sparse matrix can stay sparse. They are *not* learned parameters, so when
+    # we evaluate on a different cohort we must recompute them on the eval data.
+    # Otherwise the model is fed inputs from a distribution it never saw.
     if hasattr(model, "means") and model.means is not None:
         if model.means.shape[1] != adata_full.shape[1]:
             raise ValueError(
                 f"Gene dim mismatch: model expects {model.means.shape[1]} genes, "
                 f"dataset has {adata_full.shape[1]}"
             )
+
+        print("Recomputing per-gene means/stds on the eval dataset (chunked)")
+        sums = np.zeros(adata_full.shape[1], dtype=np.float64)
+        sum_sqs = np.zeros(adata_full.shape[1], dtype=np.float64)
+        chunk_size = 50_000
+        n_cells = adata_full.shape[0]
+        for i in range(0, n_cells, chunk_size):
+            block = adata_full.X[i:i + chunk_size]
+            if hasattr(block, "toarray"):
+                block = block.toarray()
+            sums += np.asarray(block).sum(axis=0)
+            sum_sqs += np.power(np.asarray(block), 2).sum(axis=0)
+        eval_means = sums / n_cells
+        eval_stds = np.sqrt(np.maximum(sum_sqs / n_cells - eval_means ** 2, 0))
+        eval_stds[eval_stds == 0] = 1
+
+        # Sanity print: how far the eval-set stats are from the model's baked-in
+        # (training-set) stats. A big shift means the upstream preprocessing of
+        # train and eval matched, but the cohorts are biologically different;
+        # a small shift means we're already close.
+        old_means = model.means.detach().cpu().numpy().ravel()
+        old_stds = model.stds.detach().cpu().numpy().ravel()
+        print(f"  train means: mean={old_means.mean():.4f}, eval means: mean={eval_means.mean():.4f}")
+        print(f"  train stds : mean={old_stds.mean():.4f}, eval stds : mean={eval_stds.mean():.4f}")
+        print(f"  per-gene mean diff (eval-train): mean abs = {np.abs(eval_means - old_means).mean():.4f}")
+
+        new_means = torch.tensor(eval_means, dtype=model.means.dtype, device=device).reshape_as(model.means)
+        new_stds = torch.tensor(eval_stds, dtype=model.stds.dtype, device=device).reshape_as(model.stds)
+        with torch.no_grad():
+            model.means.copy_(new_means)
+            model.stds.copy_(new_stds)
 
     # Run inference. We pass adata_full so embeddings are also generated for
     # intermediate donors when --save-embeddings is set.
