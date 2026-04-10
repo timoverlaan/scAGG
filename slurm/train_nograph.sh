@@ -71,7 +71,6 @@ apptainer exec --nv --writable-tmpfs --pwd /opt/app --containall \
 		--meta-sample-col projid \
 		--n-epochs 2 \
 		--dim 32 \
-		--split-seed 42 \
 		--batch-size 8 \
 		--dropout 0.1 \
 		--learning-rate 0.001 \
